@@ -15,12 +15,24 @@ import Booking from './models/Booking.js';
 dotenv.config();
 
 const app = express();
-app.use(cors());
+
+// Enable CORS for all incoming production & local requests
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(express.json());
 
 const server = createServer(app);
+
+// Allow Socket.io connections from all origins
 const io = new Server(server, {
-  cors: { origin: 'http://localhost:5173', methods: ['GET', 'POST'] }
+  cors: { 
+    origin: '*', 
+    methods: ['GET', 'POST'] 
+  }
 });
 
 // Connect MongoDB
@@ -42,7 +54,7 @@ app.post('/api/auth/signup', async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = await User.create({ name, email, password: hashedPassword });
     
-    const token = jwt.sign({ id: user._id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '1d' });
+    const token = jwt.sign({ id: user._id, email: user.email }, process.env.JWT_SECRET || 'secretkey', { expiresIn: '1d' });
     res.status(201).json({ user: { name: user.name, email: user.email }, token });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -59,7 +71,7 @@ app.post('/api/auth/login', async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(400).json({ message: 'Invalid credentials' });
 
-    const token = jwt.sign({ id: user._id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '1d' });
+    const token = jwt.sign({ id: user._id, email: user.email }, process.env.JWT_SECRET || 'secretkey', { expiresIn: '1d' });
     res.json({ user: { name: user.name, email: user.email }, token });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -93,7 +105,6 @@ app.post('/api/bookings', async (req, res) => {
       paymentId
     });
 
-    // Mark seats as occupied in Seat collection
     if (seats && Array.isArray(seats)) {
       for (const seatId of seats) {
         await Seat.findOneAndUpdate(
@@ -102,7 +113,6 @@ app.post('/api/bookings', async (req, res) => {
           { upsert: true }
         );
       }
-      // Broadcast seat updates to all connected clients
       io.emit('seats-updated', seats);
     }
 
@@ -163,15 +173,12 @@ app.post('/api/bookings/cancel', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Booking ID is required' });
     }
 
-    // 1. Fetch booking to release reserved seats
     const booking = await Booking.findById(bookingId);
     if (booking && booking.seats) {
-      // Free seats in DB
       await Seat.deleteMany({ seatId: { $in: booking.seats } });
       io.emit('seats-freed', booking.seats);
     }
 
-    // 2. Initiate Razorpay Refund (if paymentId provided)
     let refundResult = null;
     if (paymentId && !paymentId.startsWith('order_demo')) {
       try {
@@ -184,7 +191,6 @@ app.post('/api/bookings/cancel', async (req, res) => {
       }
     }
 
-    // 3. Delete booking from DB
     await Booking.findByIdAndDelete(bookingId);
 
     res.status(200).json({
@@ -255,7 +261,7 @@ io.on('connection', async (socket) => {
 });
 
 // ==========================================
-// SERVER LISTEN (HUMESHA AKHRI MEIN)
+// SERVER LISTEN
 // ==========================================
 const PORT = process.env.PORT || 4000;
 server.listen(PORT, () => {
